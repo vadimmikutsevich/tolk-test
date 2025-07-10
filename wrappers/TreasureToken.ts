@@ -1,30 +1,25 @@
-import { Address, beginCell, Cell, Contract, contractAddress, ContractProvider, Sender, SendMode } from '@ton/core';
+import { Address, Cell, Sender, SendMode, beginCell, contractAddress, Contract, ContractProvider } from '@ton/core';
 
-export type TreasureTokenConfig = {
-    id: number;
-    counter: number;
-};
+export type TreasureTokenConfig = {};
 
-export function treasureTokenConfigToCell(config: TreasureTokenConfig): Cell {
-    return beginCell().storeUint(config.id, 32).storeUint(config.counter, 32).endCell();
+export function treasureTokenConfigToCell(_: TreasureTokenConfig): Cell {
+    return beginCell().storeUint(0, 64).endCell();
 }
 
-export const Opcodes = {
-    OP_INCREASE: 0x7e8764ef,
-    OP_RESET: 0x3a752f06,
-};
-
 export class TreasureToken implements Contract {
-    constructor(readonly address: Address, readonly init?: { code: Cell; data: Cell }) {}
+    constructor(
+        readonly address: Address,
+        readonly init?: { code: Cell; data: Cell },
+    ) {}
 
     static createFromAddress(address: Address) {
         return new TreasureToken(address);
     }
 
-    static createFromConfig(config: TreasureTokenConfig, code: Cell, workchain = 0) {
+    static createFromConfig(config: TreasureTokenConfig, code: Cell, wc = 0) {
         const data = treasureTokenConfigToCell(config);
         const init = { code, data };
-        return new TreasureToken(contractAddress(workchain, init), init);
+        return new TreasureToken(contractAddress(wc, init), init);
     }
 
     async sendDeploy(provider: ContractProvider, via: Sender, value: bigint) {
@@ -35,51 +30,38 @@ export class TreasureToken implements Contract {
         });
     }
 
-    async sendIncrease(
+    async getTotalSupply(provider: ContractProvider): Promise<bigint> {
+        const res = await provider.get('getTotalSupply', []);
+        return res.stack.readBigNumber();
+    }
+
+    /* ───────── 3-A. Mint ───────── */
+    async sendMint(provider: ContractProvider, via: Sender, opts: { amount: bigint; value: bigint; queryID?: bigint }) {
+        await provider.internal(via, {
+            value: opts.value,
+            sendMode: SendMode.PAY_GAS_SEPARATELY,
+            body: beginCell()
+                .storeUint(0x0000_0001, 32) // тег Mint
+                .storeUint(opts.queryID ?? 0n, 64) // queryId
+                .storeUint(opts.amount, 64) // amount
+                .endCell(),
+        });
+    }
+
+    /* ───────── 3-B. Upgrade ───────── */
+    async sendUpgrade(
         provider: ContractProvider,
         via: Sender,
-        opts: {
-            increaseBy: number;
-            value: bigint;
-            queryID?: number;
-        }
+        opts: { newCode: Cell; value: bigint; queryID?: bigint },
     ) {
         await provider.internal(via, {
             value: opts.value,
             sendMode: SendMode.PAY_GAS_SEPARATELY,
             body: beginCell()
-                .storeUint(Opcodes.OP_INCREASE, 32)
-                .storeUint(opts.queryID ?? 0, 64)
-                .storeUint(opts.increaseBy, 32)
+                .storeUint(0x0000_7fff, 32) // тег Upgrade
+                .storeUint(opts.queryID ?? 0n, 64)
+                .storeRef(opts.newCode) // сам байткод
                 .endCell(),
         });
-    }
-
-    async sendReset(
-        provider: ContractProvider,
-        via: Sender,
-        opts: {
-            value: bigint;
-            queryID?: number;
-        }
-    ) {
-        await provider.internal(via, {
-            value: opts.value,
-            sendMode: SendMode.PAY_GAS_SEPARATELY,
-            body: beginCell()
-                .storeUint(Opcodes.OP_RESET, 32)
-                .storeUint(opts.queryID ?? 0, 64)
-                .endCell(),
-        });
-    }
-
-    async getCounter(provider: ContractProvider) {
-        const result = await provider.get('currentCounter', []);
-        return result.stack.readNumber();
-    }
-
-    async getID(provider: ContractProvider) {
-        const result = await provider.get('initialId', []);
-        return result.stack.readNumber();
     }
 }
